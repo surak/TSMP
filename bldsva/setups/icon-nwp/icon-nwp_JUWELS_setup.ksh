@@ -4,7 +4,7 @@ initSetup(){
   source /gpfs/software/juwels/lmod/lmod/init/ksh
 #  module load GCC ParaStationMPI CDO NCO
 
-  defaultFDICON="/p/scratch/cslts/ghasemi1/tsmp_icon205/shared_cunbo"
+  defaultFDICON="/p/largedata/slts/icon-nwp-eu2de_1nest_R2466m"
 #  iconsrc=$rootdir/${mList[2]}_${platform}_${version}_${combination}
 #  iconforcing=$defaultFDICON
 #  mpiPath=$defaultMpiPath
