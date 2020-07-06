@@ -49,7 +49,7 @@ route "${cblue}>>> c_make_icon${cnormal}"
   check
   comment "    make icon"
     export SCOREP_WRAPPER=on
-    make -j16 -f $icondir/Makefile >> $log_file 2>> $err_file
+    make -j8 -f $icondir/Makefile >> $log_file 2>> $err_file
   check
 
   comment "    cp icon binary to $bindir"
@@ -134,7 +134,26 @@ route "${cblue}<<< c_substitutions_icon${cnormal}"
 
 c_setup_icon(){
 route "${cblue}>>> c_setup_icon${cnormal}"
+if [[ $refSetup == "icon-nwp" ]] ; then
+  iconsrc=$rootdir/${mList[2]}_${platform}_${version}_${combination}
+  iconforcing=$defaultFDICON
+  mpiPath=$defaultMpiPath
+  comment "  copy icon-nwp run script to $rundir"
+  cp $rootdir/bldsva/setups/$refSetup/exp.icon-lam_nwp1nest_20160606.run $rundir/ >> $log_file 2>> $err_file
+  cp $rootdir/bldsva/setups/$refSetup/add_run_routines $rundir >> $log_file 2>> $err_file
+  cp $rootdir/bldsva/machines/$platform/loadenvs.$compiler  $rundir >> $log_file 2>> $err_file
+  check
 
+  runscriptfile=$rundir/exp.icon-lam_nwp1nest_20160606.run
+  modsrcPath="$rundir/loadenvs.$compiler"
+  addroutinesPath="$rundir/add_run_routines"
+  sed -i "s,__iconsrc__,$iconsrc,"          -i $runscriptfile >> $log_file 2>> $err_file
+  sed -i "s,__mpiPath__,$mpiPath,"          -i $runscriptfile >> $log_file 2>> $err_file
+  sed -i "s,__iconforcing__,$iconforcing,"  -i $runscriptfile >> $log_file 2>> $err_file
+  sed -i "s,__workdir__,$rundir,"           -i $runscriptfile >> $log_file 2>> $err_file
+  sed -i "s,__sourcemodule__,$modsrcPath,"  -i $runscriptfile >> $log_file 2>> $err_file
+  sed -i "s,__addroutinesPath__,$addroutinesPath,"  -i $runscriptfile >> $log_file 2>> $err_file
+else 
 comment "  cp add_run_routines to rundir"
   cp $rootdir/bldsva/setups/common/add_run_routines $rundir >> $log_file 2>> $err_file
 check
@@ -158,7 +177,7 @@ comment "  sed end time to namelist"
   sed "s,__endtime_icon_bldsva__,${dED[0]}T${dED[1]}:00:00Z," -i $rundir/icon_master.namelist >> $log_file 2>> $err_file
   sed "s,__endtime_icon_bldsva__,${dED[0]}T${dED[1]}:00:00Z," -i $rundir/NAMELIST_icon >> $log_file 2>> $err_file
 check
-
+fi
 route "${cblue}<<< c_setup_icon${cnormal}"
 }
 

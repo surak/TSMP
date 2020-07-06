@@ -1,0 +1,986 @@
+#!/bin/ksh
+#=============================================================================
+# ==========================
+#SBATCH --nodes=8
+#SBATCH --ntasks-per-node=48
+#SBATCH --time=01:00:00
+#SBATCH --output=LOG.exp.icon-lam_nwp1nest.run.%j.o
+#SBATCH --error=LOG.exp.icon-lam_nwp1nest.run.%j.o
+#SBATCH --partition=batch
+#SBATCH --account=slts
+# ==========================
+#=============================================================================
+#
+# ICON run script. Created by ./config/make_target_runscript
+# target machine is juwels
+# target use_compiler is intel
+# with mpi=yes
+# with openmp=no
+# memory_model=large
+# submit with sbatch
+# 
+#=============================================================================
+. /gpfs/software/juwels/lmod/lmod/init/ksh
+source __sourcemodule__
+set -x
+iconsrc=__iconsrc__
+mpiPath=__mpiPath__
+iconforcing=__iconforcing__
+workdir=__workdir__
+source __addroutinesPath__
+#-----------------------------------------------------------------------------
+# target parameters
+# ----------------------------
+site="fz-juelich.de"
+target="juwels"
+compiler="intel"
+loadmodule=""
+with_mpi="yes"
+with_openmp="no"
+job_name="exp.icon-lam_nwp1nest.run"
+submit="sbatch"
+#-----------------------------------------------------------------------------
+# openmp environment variables
+# ----------------------------
+export OMP_NUM_THREADS=1
+export ICON_THREADS=1
+export OMP_SCHEDULE=static
+export OMP_DYNAMIC="false"
+export OMP_STACKSIZE=200M
+#-----------------------------------------------------------------------------
+# MPI variables
+# ----------------------------
+mpi_root=$mpiPath
+no_of_nodes=8
+mpi_procs_pernode=48
+((mpi_total_procs=no_of_nodes * mpi_procs_pernode))
+START="srun"
+#-----------------------------------------------------------------------------
+bindir="$iconsrc/build/x86_64-unknown-linux-gnu/bin"   # binaries
+BUILDDIR=$iconsrc/build/x86_64-unknown-linux-gnu
+#-----------------------------------------------------------------------------
+#=============================================================================
+export LD_LIBRARY_PATH=$EBROOTNETCDF/lib64:$LD_LIBRARY_PATH
+#=============================================================================
+nproma=16
+cdo="cdo"
+cdo_diff="cdo diffn"
+icon_data_rootFolder=""
+icon_data_poolFolder="/work/paj1613/paj16130/pool"
+icon_data_buildbotFolder="/buildbot_data"
+icon_data_buildbotFolder_aes="/buildbot_data/aes"
+icon_data_buildbotFolder_oes="/buildbot_data/oes"
+export EXPNAME="icon-lam_nwp1nest_20160606"
+#=============================================================================
+#
+# This section of the run script containes the specifications of the experiment.
+# The specifications are passed by namelist to the program.
+# For a complete list see Namelist_overview.pdf
+#
+# EXPNAME and NPROMA must be defined in as environment variables or must 
+# they must be substituted with appropriate values.
+#
+# DWD, 2010-08-31
+#
+#-----------------------------------------------------------------------------
+#
+# Basic specifications of the simulation
+# --------------------------------------
+#
+# These variables are set in the header section of the completed run script:
+#
+# EXPNAME = experiment name
+# NPROMA  = array blocking length / inner loop length
+#-----------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+# The following values must be set here as shell variables so that they can be used
+# also in the executing section of the completed run script
+#
+#-----------------------------------------------------------------------------
+# the namelist filename
+atmo_namelist=NAMELIST_${EXPNAME}
+#
+##-----------------------------------------------------------------------------
+# global timing
+start_date="2016-06-06T00:00:00Z"
+end_date="2016-06-07T00:00:00Z"
+ndays_restart=60
+dt_restart=`expr ${ndays_restart} \* 86400`
+init_date=`echo ${start_date%%:*} | sed 's/\-//g' | sed 's/T//g'`
+
+#
+#
+ndays_restart=12
+dt_restart=`expr ${ndays_restart} \* 86400`
+#restart=".true."
+#
+#Timing for output
+out_start_day="2016-06-06T00:00:00Z" 
+out_end_day=${end_date} 
+out_start_night=${start_date} 
+out_end_night=${out_start_day} 
+#
+#for 3D fine based on A-train overpass timing
+#which needs to be adjusted everywhere day
+#Use the list below to adjust output timing
+#
+
+notsatpass=${start_date%%T*}
+currentdate=`echo ${start_date%%T*} | sed 's/\-//g' `
+#
+#Dictionary file for output
+dict_file="dict.${EXPNAME}" 
+cat ${iconsrc}/run/dict.icon.hdcp2  > ${dict_file}
+add_link_file ${iconsrc}/run/${dict_file}     ./
+#
+#add other required files
+DATADIR=${iconsrc}/data
+add_link_file ${DATADIR}/rrtmg_lw.nc           ./
+add_link_file ${DATADIR}/ECHAM6_CldOptProps.nc ./
+add_link_file ${DATADIR}/dmin_wetgrowth_lookup.dat ./   #for inwp_gscp==4
+#
+#
+#-----------------------------------------------------------------------------
+# model timing
+dtime=20
+dt_checkpoint=`expr 24 \* 3600 `  # write restart file every 24 hours
+#
+#-----------------------------------------------------------------------------
+# model parameters
+atmo_model_equations=3 # equation system
+#                     1=hydrost. atm. (T dynamics)
+#                     2=hydrost. atm. (theta dynamics)
+#                     3=non-hydrost. atm.,
+#                    -1=shallow water model
+#                    -2=hydrost. ocean
+iforcing=3        # 3 for inwp forcing; 0 for no forcing
+nlev=75
+#
+# ----------------------------------------------------------------------
+# SETTINGS: Input/output directories
+# ----------------------------------------------------------------------
+
+ICONDIR=${iconsrc}
+arch=x86_64-unknown-linux-gnu
+
+
+# absolute path to input directory
+INDIR=${iconforcing}/init_latbc_20160606
+
+# absolute path to radiation input directory
+#RADDIR=/pfs/imk/ICON/INPUT/IFSINIT
+RADDIR=${ICONDIR}/data
+
+# absolute path to external parameter directory
+EXTPARDIR=${iconforcing}/grids_extpar
+
+# absolute path to grid files
+GRIDDIR=${iconforcing}/grids_extpar
+
+# absolute path to model binary, including the executable
+MODEL=${ICONDIR}/build/${arch}/bin/icon
+# ----------------------------------------------------------------------
+# copy input data: grids, external parameters
+# ----------------------------------------------------------------------
+grids_folder=${GRIDDIR}
+grid_1_parent=eu2de_1nest_R2466m.parent
+grid_1=eu2de_1nest_R2466m
+
+atmo_rad_grids="${grid_1_parent}.nc"
+atmo_dyn_grids="${grid_1}.nc"
+dynamics_parent_grid_id="0"
+
+
+# reduced radiation grid file
+#add_link_file  ${GRIDDIR}/icon_grid_0043_R19B06_LR.nc icon_grid_0043_R19B06_LR.nc
+#
+
+# lateral boundary grid
+add_link_file  $INDIR/latBc_COSMOD2_R3B08toR02B10.grid.nc  latBc_boundary.grid.nc
+
+#INITIAL DATA
+add_link_file ${INDIR}/init_${grid_1}_${init_date}.nc    ifs2icon_R2B10_DOM01.nc
+add_link_file ${INDIR}/init_${grid_1}_${init_date}.nc    dwdFG_R2B10_DOM01.nc
+
+# external parameter
+add_link_file  ${EXTPARDIR}/extpar_${grid_1}_tiles.nc  extpar_${grid_1}.nc
+
+# SB-scheme
+add_link_file  ${ICONDIR}/data/dmin_wetgrowth_lookup.dat dmin_wetgrowth_lookup.dat
+add_link_file  ${ICONDIR}/src/atm_phy_schemes/mo_2mom_mcrph_driver.f90 ./
+
+# files needed for radiation
+add_link_file  ${RADDIR}/ECHAM6_CldOptProps.nc rrtm_cldopt.nc
+add_link_file  ${RADDIR}/rrtmg_lw.nc .
+
+# Dictionary for the mapping: DWD GRIB2 names <-> ICON internal names
+add_link_file  ${ICONDIR}/run/ana_varnames_map_file.txt map_file.ana
+
+# Dictionary for the mapping: GRIB2/Netcdf input names <-> ICON internal names
+add_link_file  ${ICONDIR}/run/dict.latbc map_file.latbc
+
+# ----------------------------------------------------------------------------
+# grid namelist settings
+# ----------------------------------------------------------------------------
+
+# the grid parameters
+#dynamics_grid_filename="icon_grid_0044_R19B07_L.nc"
+#radiation_grid_filename="icon_grid_0043_R19B06_LR.nc"
+#-----------------------------------------------------------------------------
+# the grid and other files
+#
+#
+#-----------------------------------------------------------------------------
+#
+# write ICON namelist parameters
+# ------------------------
+# For a complete list see Namelist_overview and Namelist_overview.pdf
+#
+# ------------------------
+## reconstrcuct the grid parameters in namelist form
+#dynamics_grid_filename=""
+#for gridfile in ${atmo_dyn_grids}; do
+#  dynamics_grid_filename="${dynamics_grid_filename} '${gridfile}',"
+#done
+#dynamics_parent_grid_id="${dynamics_parent_grid_id},"
+##
+# ------------------------
+## reconstrcuct the grid parameters in namelist form
+dynamics_grid_filename=""
+for gridfile in ${atmo_dyn_grids}; do
+  dynamics_grid_filename="${dynamics_grid_filename} '${gridfile}',"
+done
+dynamics_parent_grid_id="${dynamics_parent_grid_id},"
+
+radiation_grid_filename=""
+for gridfile in ${atmo_rad_grids}; do
+  radiation_grid_filename="${radiation_grid_filename} '${gridfile}',"
+done
+
+#
+cat > ${atmo_namelist} << EOF
+! parallel_nml: MPI parallelization -------------------------------------------
+&parallel_nml
+ nproma                      =                          16         ! loop chunk length
+ p_test_run                  =                     .FALSE.        ! .TRUE. means verification run for MPI parallelization
+ num_io_procs                =                         42         ! number of I/O processors
+ num_restart_procs           =                          0         ! number of restart processors
+ num_prefetch_proc           =                          1         ! number of processors for LBC prefetching
+ iorder_sendrecv             =                          3         ! sequence of MPI send/receive calls
+/
+
+! run_nml: general switches ---------------------------------------------------
+&run_nml
+ ltestcase                   =                     .FALSE.        ! real case run
+ num_lev                     =                     ${nlev}        ! number of full levels (atm.) for each domain
+ lvert_nest                  =                     .FALSE.        ! no vertical nesting
+ dtime                       =                    ${dtime}        ! timestep in seconds
+ ldynamics                   =                      .TRUE.        ! compute adiabatic dynamic tendencies
+ ltransport                  =                      .TRUE.        ! compute large-scale tracer transport
+ ntracer                     =                          5         ! number of advected tracers
+ iforcing                    =                ${iforcing}         ! forcing of dynamics and transport by parameterized processes
+ msg_level                   =                         10         ! detailed report during integration
+ ltimer                      =                      .TRUE.        ! timer for monitoring the runtime of specific routines
+ timers_level                =                         10         ! performance timer granularity
+ check_uuid_gracefully       =                      .TRUE.        ! give only warnings for non-matching uuids
+ output                      =                        "nml"       ! main switch for enabling/disabling components of the model output
+/
+
+! diffusion_nml: horizontal (numerical) diffusion ----------------------------
+&diffusion_nml
+ lhdiff_vn                   =                      .TRUE.        ! diffusion on the horizontal wind field
+ lhdiff_temp                 =                      .TRUE.        ! diffusion on the temperature field
+ lhdiff_w                    =                      .TRUE.        ! diffusion on the vertical wind field
+ hdiff_order                 =                          5         ! order of nabla operator for diffusion
+ itype_vn_diffu              =                          1         ! reconstruction method used for Smagorinsky diffusion
+ itype_t_diffu               =                          2         ! discretization of temperature diffusion
+ hdiff_efdt_ratio            =                         36.0       ! ratio of e-folding time to time step 
+ hdiff_smag_fac              =                          0.015     ! scaling factor for Smagorinsky diffusion
+/
+
+! dynamics_nml: dynamical core -----------------------------------------------
+&dynamics_nml
+ iequations                  =    ${atmo_model_equations}         ! type of equations and prognostic variables
+ idiv_method                 =                          1         ! method for divergence computation
+ divavg_cntrwgt              =                          0.50      ! weight of central cell for divergence averaging
+ lcoriolis                   =                      .TRUE.        ! Coriolis force
+/
+
+! extpar_nml: external data --------------------------------------------------
+&extpar_nml
+ itopo                       =                          1         ! topography (0:analytical)
+ n_iter_smooth_topo          =                      1,1,3         ! iterations of topography smoother
+ heightdiff_threshold        =             3000,3000,3000.        ! height difference between neighb. grid points
+ hgtdiff_max_smooth_topo     =               750,750.,750.        ! see Namelist doc
+ heightdiff_threshold        =            2250.,1500.,500.
+/
+
+! initicon_nml: specify read-in of initial state ------------------------------
+&initicon_nml
+ init_mode                   =                          4         ! start from DWD fg with subsequent vertical remapping 
+ lread_ana                   =                     .FALSE.        ! no analysis data will be read
+ ana_varnames_map_file       =              "map_file.ana"        ! dictionary mapping internal names onto GRIB2 shortNames
+ ltile_coldstart             =                      .TRUE.        ! coldstart for surface tiles
+ ltile_init                  =                     .FALSE.        ! set it to .TRUE. if FG data originate from run without tiles
+/
+
+! grid_nml: horizontal grid --------------------------------------------------
+&grid_nml
+ dynamics_grid_filename      = ${dynamics_grid_filename}
+ dynamics_parent_grid_id     = ${dynamics_parent_grid_id}
+ radiation_grid_filename     = ${radiation_grid_filename}         ! array of the grid filenames for the radiation model
+ lredgrid_phys               =                      .TRUE.        ! .true.=radiation is calculated on a reduced grid
+ lfeedback                   =     .FALSE.,.FALSE.,.FALSE.        ! specifies if feedback to parent grid is performed
+ l_limited_area              =                      .TRUE.        ! .TRUE. performs limited area run
+ ifeedback_type              =                          2         ! feedback type (incremental/relaxation-based)
+/
+
+! gridref_nml: grid refinement settings --------------------------------------
+&gridref_nml
+ denom_diffu_v               =                        150.        ! denominator for lateral boundary diffusion of velocity
+ grf_intmethod_e             = 6  !6 default
+ grf_scalfbk                 = 1
+ grf_tracfbk                 = 1
+ l_mass_consvcorr            = .true.
+ l_density_nudging           = .true.
+
+/
+
+! interpol_nml: settings for internal interpolation methods ------------------
+&interpol_nml
+ nudge_zone_width            =                          8         ! width of lateral boundary nudging zone
+ support_baryctr_intp        =                     .FALSE.        ! barycentric interpolation support for output
+ lsq_high_ord                = 2
+ rbf_scale_mode_ll           = 2 !2=default for automatic calculations
+/
+
+! io_nml: general switches for model I/O -------------------------------------
+&io_nml
+ dt_checkpoint               =            ${dt_checkpoint}        ! [s] trigger new restart file
+ itype_pres_msl              =                          5         ! method for computation of mean sea level pressure
+ itype_rh                    =                          1         ! method for computation of relative humidity
+ lmask_boundary              =                      .TRUE.        ! mask out interpolation zone in output
+/
+
+! limarea_nml: settings for limited area mode ---------------------------------
+&limarea_nml
+ itype_latbc                 =                          1         ! 1: time-dependent lateral boundary conditions
+ dtime_latbc                 =                      10800.        ! time difference between 2 consecutive boundary data
+ !latbc_boundary_grid         = 'latBc_boundary.grid.nc' ! Grid file defining the lateral boundary
+ latbc_path                  =                 '${INDIR}'         ! Absolute path to boundary data
+ latbc_varnames_map_file     =            'map_file.latbc'
+ latbc_filename              =       'latbc_${grid_1}_<y><m><d><h>.nc'        ! boundary data inputfilename
+ init_latbc_from_fg          =                     .FALSE.        ! .TRUE.: take lbc for initial time from first guess
+/
+
+! lnd_nml: land scheme switches -----------------------------------------------
+&lnd_nml
+ ntiles                      =                          1         ! number of tiles
+ nlev_snow                   =                          3         ! number of snow layers
+ lmulti_snow                 =                     .FALSE.        ! .TRUE. for use of multi-layer snow model
+ idiag_snowfrac              =                          1         ! type of snow-fraction diagnosis
+ lsnowtile                   =                     .FALSE.        ! .TRUE.=consider snow-covered and snow-free separately
+ itype_root                  =                          2         ! root density distribution
+ itype_heatcond              =                          3         ! type of soil heat conductivity
+ itype_lndtbl                =                          4         ! table for associating surface parameters
+ itype_evsl                  =                          4         ! type of bare soil evaporation
+ itype_root                  =                          2         ! root density distribution
+ cwimax_ml                   =                      5.e-4         ! scaling parameter for max. interception storage
+ c_soil                      =                       1.75         ! surface area density of the evaporative soil surface
+ c_soil_urb                  =                        0.5         ! same for urban areas
+ lseaice                     =                      .TRUE.        ! .TRUE. for use of sea-ice model
+ llake                       =                      .TRUE.        ! .TRUE. for use of lake model
+/
+
+! nonhydrostatic_nml: nonhydrostatic model -----------------------------------
+&nonhydrostatic_nml
+ iadv_rhotheta               =                          2         ! advection method for rho and rhotheta
+ ivctype                     =                          2         ! type of vertical coordinate
+ itime_scheme                =                          4         ! time integration scheme
+ ndyn_substeps               =                          5         ! number of dynamics steps per fast-physics step
+ exner_expol                 =                          0.333     ! temporal extrapolation of Exner function
+ vwind_offctr                =                          0.25      ! off-centering in vertical wind solver
+ damp_height                 =      15000.0,15000.0,15000.0       ! height at which Rayleigh damping of vertical wind starts
+ rayleigh_coeff              =                 0.25,0.5,1.5       ! Rayleigh damping coefficient
+ divdamp_order               =                          4         ! order of divergence damping 
+ divdamp_type                =                          3         ! type of divergence damping
+ divdamp_fac                 =                          0.004     ! scaling factor for divergence damping
+ l_open_ubc                  =                      .FALSE.       ! .TRUE.=use open upper boundary condition
+ igradp_method               =                          3         ! discretization of horizontal pressure gradient
+ l_zdiffu_t                  =                      .TRUE.        ! specifies computation of Smagorinsky temperature diffusion
+ thslp_zdiffu                =                          0.02      ! slope threshold (temperature diffusion)
+ thhgtd_zdiffu               =                        125.0       ! threshold of height difference (temperature diffusion)
+ htop_moist_proc             =                      22500.0       ! max. height for moist physics
+ hbot_qvsubstep              =                      22500.0       ! height above which QV is advected with substepping scheme
+/
+
+! nwp_phy_nml: switches for the physics schemes ------------------------------
+&nwp_phy_nml
+ inwp_gscp                   =                          4         ! cloud microphysics and precipitation
+ inwp_convection             =                          0         ! convection
+ lshallowconv_only           =                      .TRUE.        ! only shallow convection
+ inwp_radiation              =                          1         ! radiation
+ inwp_cldcover               =                          1         ! cloud cover scheme for radiation
+ inwp_turb                   =                          1         ! vertical diffusion and transfer
+ inwp_satad                  =                          1         ! saturation adjustment
+ inwp_sso                    =                          1         ! subgrid scale orographic drag
+ inwp_gwd                    =                          0         ! non-orographic gravity wave drag
+ inwp_surface                =                          1         ! surface scheme
+ latm_above_top              =                      .TRUE.        ! take into account atmosphere above model top for radiation computation
+ ldetrain_conv_prec          =                      .TRUE.
+ efdt_min_raylfric           =                       7200.        ! minimum e-folding time of Rayleigh friction
+ itype_z0                    =                          1         ! type of roughness length data
+ icapdcycl                   =                          3         ! apply CAPE modification to improve diurnalcycle over tropical land
+ icpl_aero_conv              =                          0         ! coupling between autoconversion and Tegen aerosol climatology
+ icpl_aero_gscp              =                          0         ! coupling between autoconversion and Tegen aerosol climatology
+ lrtm_filename               =                'rrtmg_lw.nc'       ! longwave absorption coefficients for RRTM_LW
+ cldopt_filename             =             'rrtm_cldopt.nc'       ! RRTM cloud optical properties
+ dt_rad                      =                         900        ! time step for radiation in s
+ dt_conv                     =                         300.       ! time step for convection in s (domain specific)
+ dt_sso                      =                         360.       ! time step for SSO parameterization
+ dt_gwd                      =                         360.       ! time step for gravity wave drag parameterization
+/
+
+! les_nml:
+&les_nml
+ isrfc_type                  =                          1        !1=TERRA,2=Fixed flux, 5=fixed SST, 3=fixed bflux
+ ldiag_les_out               =                    .FALSE.
+ les_metric                  =                     .TRUE.
+/
+
+! nwp_tuning_nml: additional tuning parameters ----------------------------------
+&nwp_tuning_nml
+ itune_albedo                =                          1         ! reduced albedo (w.r.t. MODIS data) over Sahara
+ tune_gkwake                 =                        1.8
+ tune_gkdrag                 =                        0.01
+ tune_minsnowfrac            =                        0.3
+/
+
+! radiation_nml: radiation scheme ---------------------------------------------
+&radiation_nml
+ irad_o3                     =                          7         ! ozone climatology
+ irad_aero                   =                          6         ! aerosols
+ albedo_type                 =                          2         ! type of surface albedo
+ vmr_co2                     =                    390.e-06
+ vmr_ch4                     =                   1800.e-09
+ vmr_n2o                     =                   322.0e-09
+ vmr_o2                      =                     0.20946
+ vmr_cfc11                   =                    240.e-12
+ vmr_cfc12                   =                    532.e-12
+/
+
+! sleve_nml: vertical level specification -------------------------------------
+&sleve_nml
+ min_lay_thckn               =                         20.0       ! layer thickness of lowermost layer
+ top_height                  =                      21000.0       ! height of model top
+ stretch_fac                 =                          0.9      ! stretching factor to vary distribution of model levels
+ decay_scale_1               =                       4000.0       ! decay scale of large-scale topography component
+ decay_scale_2               =                       2500.0       ! decay scale of small-scale topography component
+ decay_exp                   =                          1.2       ! exponent of decay function
+ flat_height                 =                      16000.0       ! height above which the coordinate surfaces are flat
+/
+
+! transport_nml: tracer transport ---------------------------------------------
+&transport_nml
+ ivadv_tracer                =              3, 3, 3, 3, 3         ! tracer specific method to compute vertical advection
+ itype_hlimit                =              4, 4, 4, 4, 4         ! type of limiter for horizontal transport
+ ihadv_tracer                =             52, 2, 2, 2, 2         ! tracer specific method to compute horizontal advection
+ llsq_svd                    =                      .TRUE.        ! use SV decomposition for least squares design matrix
+ lclip_tracer                =                     .FALSE.
+/
+
+! turbdiff_nml: turbulent diffusion -------------------------------------------
+&turbdiff_nml
+ tkhmin                      =                          0.75      ! scaling factor for minimum vertical diffusion coefficient
+ tkmmin                      =                          0.75      ! scaling factor for minimum vertical diffusion coefficient
+ pat_len                     =                        100.0       ! effective length scale of thermal surface patterns
+ c_diff                      =                          0.2       ! length scale factor for vertical diffusion of TKE
+ rat_sea                     =                          7.5       ! controls laminar resistance for sea surface
+ ltkesso                     =                        .TRUE.      ! consider TKE-production by sub-grid SSO wakes
+ frcsmot                     =                          0.2       ! these 2 switches together apply vertical smoothing of the TKE source terms
+ imode_frcsmot               =                            2       ! in the tropics (only), which reduces the moist bias in the tropical lower troposphere
+ itype_sher                  =                            3       ! type of shear forcing used in turbulence
+ ltkeshs                     =                        .TRUE.      ! include correction term for coarse grids in hor. shear production term
+ a_hshr                      =                          2.0       ! length scale factor for separated horizontal shear mode
+ icldm_turb                  =                            1       ! mode of cloud water representation in turbulence
+/
+
+&output_nml
+ filetype                    =                          4         ! output format: 2=GRIB2, 4=NETCDFv2
+ dom                         =                         -1         ! write all domains
+ output_bounds               =                  0., 0., 40.        ! output: start, end, increment
+ steps_per_file              =                          1         ! number of output steps in one output file
+ mode                        =                          1         ! 1: relative t-axis, 2: absolute t-axis
+ include_last                =                      .TRUE.        ! flag whether to include the last time step
+ output_filename             =                 'ICONCONST'        ! file name base
+ output_grid                 =                      .TRUE.        ! flag whether grid information is added to output.
+ remap                       =                          1         ! 1: remap to lat-lon grid
+ reg_lon_def                 =             -4.4,0.02,21.0
+ reg_lat_def                 =             42.5,0.02,59.3
+ ml_varlist                  =      'z_mc', 'z_ifc', 'topography_c'
+/
+
+! output_nml: specifies an output stream --------------------------------------
+&output_nml
+ filetype                    =                          4  ! output format: 2=GRIB2, 4=NETCDFv2
+ dom                         =                          1  ! write domain 1 only
+ output_bounds               =        0., 10000000., 1800. ! start, end, increment
+ steps_per_file              =                          1  ! number of steps per file
+ steps_per_file_inclfirst    =                     .FALSE. ! first step not counted wrt steps_per_file count (otherwise first file contains 2 times)
+ !mode                        =                          1  ! 1: forecast mode (relative t-axis), 2: climate mode (absolute t-axis)
+ include_last                =                     .TRUE.
+ output_filename             =                    'NWP_LAM_R19B07'
+ filename_format             = '<output_filename>_DOM<physdom>_<datetime2>' ! file name base
+ output_grid                 =                      .TRUE.
+ remap                       =                          1  ! 1: remap to lat-lon grid
+ reg_lon_def                 =              -4.4,0.02,21.0
+ reg_lat_def                 =              42.5,0.02,59.3
+ ml_varlist='u', 'v', 'w', 'temp', 'pres', 'qv', 'qc','qi','qr','qs','clcl','clcm','clch',
+ 'group:precip_vars','tqv','tqc','tqi','group:land_vars','albdif','albvisdir','albnirdir','emis_rad',
+ 'rh_2m','u_10m','v_10m','sp_10m','ASODIFD_S','ASODIFU_S','ASODIRD_S','ALHFL_S','ASHFL_S','ASOB_S','ASOB_T',
+ 'ATHB_S','ATHB_T','tmax_2m','tmin_2m','t_2m','pres_sfc','pres_msl','gust10','gz0'
+/
+EOF
+#!/bin/ksh
+#=============================================================================
+#
+# This section of the run script prepares and starts the model integration. 
+#
+# bindir and START must be defined as environment variables or
+# they must be substituted with appropriate values.
+#
+# Marco Giorgetta, MPI-M, 2010-04-21
+#
+#-----------------------------------------------------------------------------
+#final_status_file=${ICON_BASE_PATH}/run/${job_name}.final_status
+final_status_file=${job_name}.final_status
+#rm -f ${final_status_file}
+#-----------------------------------------------------------------------------
+#
+# directories definition
+#
+#ICONDIR=${ICON_BASE_PATH}
+RUNSCRIPTDIR=${ICONDIR}/run
+if [ x$grids_folder = x ] ; then
+   HGRIDDIR=${ICONDIR}/grids
+else
+   HGRIDDIR=$grids_folder
+fi
+
+# experiment directory, with plenty of space, create if new
+#EXPDIR=${ICONDIR}/experiments/${EXPNAME}
+EXPDIR=${workdir}
+if [ ! -d ${EXPDIR} ] ;  then
+  mkdir -p ${EXPDIR}
+fi
+#
+ls -ld ${EXPDIR}
+if [ ! -d ${EXPDIR} ] ;  then
+    mkdir ${EXPDIR}
+#else
+#   rm -rf ${EXPDIR}
+#   mkdir  ${EXPDIR}
+fi
+ls -ld ${EXPDIR}
+check_error $? "${EXPDIR} does not exist?"
+
+cd ${EXPDIR}
+
+#-----------------------------------------------------------------------------
+final_status_file=${RUNSCRIPTDIR}/${job_name}.final_status
+rm -f ${final_status_file}
+
+#-----------------------------------------------------------------------------
+# set up the model lists if they do not exist
+# this works for single model runs
+# for coupled runs the lists should be declared explicilty
+if [ x$namelist_list = x ]; then
+#  minrank_list=(        0           )
+#  maxrank_list=(     65535          )
+#  incrank_list=(        1           )
+  minrank_list[0]=0
+  maxrank_list[0]=65535
+  incrank_list[0]=1
+  if [ x$atmo_namelist != x ]; then
+    # this is the atmo model
+    namelist_list[0]="$atmo_namelist"
+    modelname_list[0]="atmo"
+    modeltype_list[0]=1
+    run_atmo="true"
+  elif [ x$ocean_namelist != x ]; then
+    # this is the ocean model
+    namelist_list[0]="$ocean_namelist"
+    modelname_list[0]="ocean"
+    modeltype_list[0]=2
+  elif [ x$psrad_namelist != x ]; then
+    # this is the psrad model
+    namelist_list[0]="$psrad_namelist"
+    modelname_list[0]="psrad"
+    modeltype_list[0]=3
+  elif [ x$testbed_namelist != x ]; then
+    # this is the testbed model
+    namelist_list[0]="$testbed_namelist"
+    modelname_list[0]="testbed"
+    modeltype_list[0]=99
+  else
+    check_error 1 "No namelist is defined"
+  fi 
+fi
+
+#-----------------------------------------------------------------------------
+
+
+#-----------------------------------------------------------------------------
+# set some default values and derive some run parameteres
+restart=${restart:=".false."}
+restartSemaphoreFilename='isRestartRun.sem'
+#AUTOMATIC_RESTART_SETUP:
+if [ -f ${restartSemaphoreFilename} ]; then
+  restart=.true.
+  #  do not delete switch-file, to enable restart after unintended abort
+  #[[ -f ${restartSemaphoreFilename} ]] && rm ${restartSemaphoreFilename}
+fi
+#END AUTOMATIC_RESTART_SETUP
+#
+# wait 5min to let GPFS finish the write operations
+if [ "x$restart" != 'x.false.' -a "x$submit" != 'x' ]; then
+  if [ x$(df -T ${EXPDIR} | cut -d ' ' -f 2) = gpfs ]; then
+    sleep 10;
+  fi
+fi
+# fill some checks
+
+run_atmo=${run_atmo="false"}
+if [ x$atmo_namelist != x ]; then
+  run_atmo="true"
+fi
+run_jsbach=${run_jsbach="false"}
+run_ocean=${run_ocean="false"}
+if [ x$ocean_namelist != x ]; then
+  run_ocean="true"
+fi
+run_psrad=${run_psrad="false"}
+if [ x$psrad_namelist != x ]; then
+  run_psrad="true"
+fi
+
+#-----------------------------------------------------------------------------
+# add grids to required files
+all_grids="${atmo_dyn_grids} ${atmo_rad_grids} ${ocean_grids}"
+for gridfile in ${all_grids}; do
+  #
+  gridfile=${gridfile//\'/} # strip all ' in case ' is used to delimit the grid names
+  gridfile=${gridfile//\"/} # strip all " in case " is used to delimit the grid names
+  gridfile=${gridfile//\,/} # strip all , in case , is used to separate the grid names
+  #
+  grfinfofile=${gridfile%.nc}-grfinfo.nc
+  #
+  ls -l ${HGRIDDIR}/$gridfile
+  check_error $? "${HGRIDDIR}/$gridfile does not exist."
+  add_required_file ${HGRIDDIR}/${gridfile} ./
+  if [ -f ${HGRIDDIR}/${grfinfofile} ]; then    
+    add_required_file ${HGRIDDIR}/${grfinfofile} ./
+  fi
+done
+#-----------------------------------------------------------------------------
+# print_required_files
+copy_required_files
+link_required_files
+
+
+#-----------------------------------------------------------------------------
+# get restart files
+
+if  [ x$restart_atmo_from != "x" ] ; then
+  rm -f restart_atm_DOM01.nc
+#  ln -s ${ICONDIR}/experiments/${restart_from_folder}/${restart_atmo_from} ${EXPDIR}/restart_atm_DOM01.nc
+  cp ${ICONDIR}/experiments/${restart_from_folder}/${restart_atmo_from} cp_restart_atm.nc
+  ln -s cp_restart_atm.nc restart_atm_DOM01.nc
+  restart=".true."
+fi
+if  [ x$restart_ocean_from != "x" ] ; then
+  rm -f restart_oce.nc
+#  ln -s ${ICONDIR}/experiments/${restart_from_folder}/${restart_ocean_from} ${EXPDIR}/restart_oce.nc
+  cp ${ICONDIR}/experiments/${restart_from_folder}/${restart_ocean_from} cp_restart_oce_DOM01.nc
+  ln -s cp_restart_oce_DOM01.nc restart_oce_DOM01.nc
+  restart=".true."
+fi
+#-----------------------------------------------------------------------------
+
+
+read_restart_namelists=${read_restart_namelists:=".true."}
+
+#-----------------------------------------------------------------------------
+#
+# create ICON master namelist
+# ------------------------
+# For a complete list see Namelist_overview and Namelist_overview.pdf
+
+#-----------------------------------------------------------------------------
+# create master_namelist
+master_namelist=icon_master.namelist
+if [ x$end_date = x ]; then
+cat > $master_namelist << EOF
+&master_nml
+ lrestart            = $restart
+/
+&master_time_control_nml
+ experimentStartDate  = "$start_date" 
+ restartTimeIntval    = "$restart_interval" 
+ checkpointTimeIntval = "$checkpoint_interval" 
+/
+&time_nml
+ is_relative_time = .false.
+/
+EOF
+else
+if [ x$calendar = x ]; then
+  calendar='proleptic gregorian'
+  calendar_type=1
+else
+  calendar=$calendar
+  calendar_type=$calendar_type
+fi
+cat > $master_namelist << EOF
+&master_nml
+ lrestart            = $restart
+ read_restart_namelists = $read_restart_namelists
+/
+&master_time_control_nml
+ calendar             = "$calendar"
+ checkpointTimeIntval = "$checkpoint_interval" 
+ restartTimeIntval    = "$restart_interval" 
+ experimentStartDate  = "$start_date" 
+ experimentStopDate   = "$end_date" 
+/
+&time_nml
+ is_relative_time = .false.
+/
+EOF
+fi
+#-----------------------------------------------------------------------------
+
+
+#-----------------------------------------------------------------------------
+# add model component to master_namelist
+add_component_to_master_namelist()
+{
+    
+  model_namelist_filename="$1"
+  model_name=$2
+  model_type=$3
+  model_min_rank=$4
+  model_max_rank=$5
+  model_inc_rank=$6
+  
+cat >> $master_namelist << EOF
+&master_model_nml
+  model_name="$model_name"
+  model_namelist_filename="$model_namelist_filename"
+  model_type=$model_type
+  model_min_rank=$model_min_rank
+  model_max_rank=$model_max_rank
+  model_inc_rank=$model_inc_rank
+/
+EOF
+
+#-----------
+#get namelist
+
+#  if [ -f ${RUNSCRIPTDIR}/$model_namelist_filename ] ; then
+#    mv -f ${RUNSCRIPTDIR}/$model_namelist_filename ${EXPDIR}
+#    check_error $? "mv -f ${RUNSCRIPTDIR}/$model_namelist_filename"
+#  else
+#    check_error 1 "${RUNSCRIPTDIR}/$model_namelist_filename does not exist"
+#  fi  
+
+}
+#-----------------------------------------------------------------------------
+
+
+no_of_models=${#namelist_list[*]}
+echo "no_of_models=$no_of_models"
+
+j=0
+while [ $j -lt ${no_of_models} ]
+do
+  add_component_to_master_namelist "${namelist_list[$j]}" "${modelname_list[$j]}" ${modeltype_list[$j]} ${minrank_list[$j]} ${maxrank_list[$j]} ${incrank_list[$j]}
+  j=`expr ${j} + 1`
+done
+
+#-----------------------------------------------------------------------------
+# Add JSBACH part to master_namelist
+
+if [[ $run_jsbach == @(yes|true) ]]; then
+  cat >> $master_namelist << EOF
+&jsb_control_nml
+ is_standalone      = .false.
+ restart_jsbach     = .false.
+ debug_level        = 0
+ timer_level        = 0
+/
+EOF
+#
+if [[ -n ${atmo_dyn_grids} ]]; then
+  set -A gridfiles $atmo_dyn_grids
+  no_of_domains=${#gridfiles[*]}
+else
+  no_of_domains=1
+fi
+echo "no_of_domains=$no_of_domains"
+domain=""
+domain_suffix=""
+j=1
+while [ $j -le ${no_of_domains} ]
+do
+  if [[ $no_of_domains -gt 1 ]]; then
+    # no_of_domains < 10 !
+    domain=" DOM0${j}"
+    domain_suffix="_d${j}"
+  fi
+  cat >> $master_namelist << EOF
+&jsb_model_nml
+ model_id = $j
+ model_name = "JSBACH${domain}"
+ model_shortname = "jsb${domain_suffix}"
+ model_description = 'JSBACH land surface model'
+ model_namelist_filename = "${lnd_namelist}${domain_suffix}"
+/
+EOF
+#  if [[ -f ${RUNSCRIPTDIR}/NAMELIST_${EXPNAME}_lnd${domain_suffix} && -f ${EXPDIR}/NAMELIST_${EXPNAME}_lnd${domain_suffix} ]] ; then
+#    # namelist file has already been copied to expdir by copy_required_files above
+#    rm ${RUNSCRIPTDIR}/NAMELIST_${EXPNAME}_lnd${domain_suffix}
+#    check_error $? "rm ${RUNSCRIPTDIR}/NAMELIST_${EXPNAME}_lnd${domain_suffix}"
+#  else
+#    check_error 1 "${RUNSCRIPTDIR}/NAMELIST_${EXPNAME}_lnd${domain_suffix} does not exist"
+#  fi
+  j=`expr ${j} + 1`
+done
+fi
+#-----------------------------------------------------------------------------
+
+
+#-----------------------------------------------------------------------------
+#
+#  get model
+#
+export MODEL=${bindir}/icon
+#
+ls -l ${MODEL}
+check_error $? "${MODEL} does not exist?"
+#-----------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
+#
+# start experiment
+#
+
+rm -f finish.status
+#
+#if [ x$target = "xblizzard" ] ; then
+#  run_model
+#else
+  date
+  ${START} ${MODEL} # > out.txt 2>&1
+  date
+#fi
+#
+if [ -r finish.status ] ; then
+  check_final_status 0 "${START} ${MODEL}"
+else
+  check_final_status -1 "${START} ${MODEL}"
+fi
+#
+#-----------------------------------------------------------------------------
+#
+finish_status=`cat finish.status`
+echo $finish_status
+echo "============================"
+echo "Script run successfully: $finish_status"
+echo "============================"
+#-----------------------------------------------------------------------------
+if [[ "x$use_hamocc" = "xyes" ]]; then
+# store HAMOCC log file
+strg="$(ls -rt ${EXPNAME}_hamocc_EU*.nc* | tail -1 )"
+prefx="${EXPNAME}_hamocc_EU_tendencies"
+foo=${strg##${prefx}}
+foo=${foo%%.*}
+bgcout_file="bgcout_${foo}"
+mv bgcout $bgcout_file
+fi
+#-----------------------------------------------------------------------------
+namelist_list=""
+#-----------------------------------------------------------------------------
+# check if we have to restart, ie resubmit
+#   Note: this is a different mechanism from checking the restart
+if [ $finish_status = "RESTART" ] ; then
+  echo "restart next experiment..."
+  this_script="${RUNSCRIPTDIR}/${job_name}"
+  echo 'this_script: ' "$this_script"
+  touch ${restartSemaphoreFilename}
+  cd ${RUNSCRIPTDIR}
+  ${submit} $this_script
+else
+  [[ -f ${restartSemaphoreFilename} ]] && rm ${restartSemaphoreFilename}
+fi
+
+#-----------------------------------------------------------------------------
+# automatic call/submission of post processing if available
+if [ "x${autoPostProcessing}" = "xtrue" ]; then
+  # check if there is a postprocessing is available
+  cd ${RUNSCRIPTDIR}
+  targetPostProcessingScript="./post.${EXPNAME}.run"
+  [[ -x $targetPostProcessingScript ]] && ${submit} ${targetPostProcessingScript}
+  cd -
+fi
+
+#-----------------------------------------------------------------------------
+# check if we test the restart mechanism
+get_last_1_restart()
+{
+  model_restart_param=$1
+  restart_list=$(ls *restart_*${model_restart_param}*_*T*Z.nc)
+  
+  last_restart=""
+  last_1_restart=""  
+  for restart_file in $restart_list
+  do
+    last_1_restart=$last_restart
+    last_restart=$restart_file
+
+    echo $restart_file $last_restart $last_1_restart
+  done  
+}
+
+
+restart_atmo_from=""
+restart_ocean_from=""
+if [ x$test_restart = "xtrue" ] ; then
+  # follows a restart run in the same script
+  # set up the restart parameters
+  restart_from_folder=${EXPNAME}
+  # get the previous from last rstart file for atmo
+  get_last_1_restart "atm"
+  if [ x$last_1_restart != x ] ; then
+    restart_atmo_from=$last_1_restart
+  fi
+  get_last_1_restart "oce"
+  if [ x$last_1_restart != x ] ; then
+    restart_ocean_from=$last_1_restart
+  fi
+  
+  EXPNAME=${EXPNAME}_restart
+  test_restart="false"
+fi
+
+#-----------------------------------------------------------------------------
+
+#cd $RUNSCRIPTDIR
+
+#-----------------------------------------------------------------------------
+
+	
+# exit 0
+#
+# vim:ft=sh
+#-----------------------------------------------------------------------------

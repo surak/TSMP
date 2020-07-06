@@ -11,7 +11,7 @@ route "${cblue}>> getMachineDefaults${cnormal}"
   check
 
 
-  defaultMpiPath="$EBROOTPSMPI"
+  defaultMpiPath="$EBROOTIMPI"
   defaultNcdfPath="$EBROOTNETCDFMINFORTRAN"
   #defaultGrib1Path="/gpfs/homea/slts/slts00/local/jureca/grib1_DWD/grib1-DWD20110128.jureca_tc2015.07_psintel_opt_KGo/lib"
 
